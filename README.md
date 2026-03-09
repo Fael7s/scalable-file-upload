@@ -1,15 +1,19 @@
 # 📁 Scalable File Upload System
 
-API REST escalável para upload de arquivos com armazenamento no Amazon S3,
-geração de links temporários para download e logs de acesso.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green.svg)](https://fastapi.tiangolo.com/)
 
-## Stack
+API REST de alta performance desenvolvida para gerenciar o ciclo de vida de arquivos (upload, listagem, download seguro e deleção) utilizando infraestrutura de nuvem. O projeto demonstra o uso de tecnologias modernas de backend e integração com serviços de storage escaláveis.
 
-- **Python 3.12** + **FastAPI**
-- **Amazon S3** (armazenamento)
-- **Amazon EC2** (deploy)
-- **SQLite** (metadata/logs — substituível por PostgreSQL)
-- **Docker**
+## 🛠️ Stack Tecnológica
+
+- **Backend:** [FastAPI](https://fastapi.tiangolo.com/) (Framework assíncrono de alta performance)
+- **Storage:** [Amazon S3](https://aws.amazon.com/s3/) (Armazenamento de objetos altamente disponível)
+- **Banco de Dados:** SQLite com [SQLAlchemy 2.0](https://www.sqlalchemy.org/) (ORM Assíncrono)
+- **Segurança:** Autenticação via API Key e Presigned URLs (Links temporários)
+- **DevOps:** Docker & Docker Compose para padronização de ambiente
+- **Testes:** Pytest com suporte a testes assíncronos (httpx)
 
 ## Funcionalidades
 
