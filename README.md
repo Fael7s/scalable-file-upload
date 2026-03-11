@@ -1,4 +1,4 @@
-# 📁 Scalable File Upload System
+# Scalable File Upload System
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
@@ -6,7 +6,7 @@
 
 API REST de alta performance desenvolvida para gerenciar o ciclo de vida de arquivos (upload, listagem, download seguro e deleção) utilizando infraestrutura de nuvem. O projeto demonstra o uso de tecnologias modernas de backend e integração com serviços de storage escaláveis.
 
-## 🛠️ Stack Tecnológica
+## Stack Tecnológica
 
 - **Backend:** [FastAPI](https://fastapi.tiangolo.com/) (Framework assíncrono de alta performance)
 - **Storage:** [Amazon S3](https://aws.amazon.com/s3/) (Armazenamento de objetos altamente disponível)
@@ -26,22 +26,22 @@ API REST de alta performance desenvolvida para gerenciar o ciclo de vida de arqu
 
 ## Quick Start
 
-### 1. Clone e configure
+### 1. Configuração Inicial
 
 ```bash
 git clone https://github.com/Fael7s/scalable-file-upload.git
 cd scalable-file-upload
 cp .env.example .env
-# Edite o .env com suas credenciais AWS
+# Edite o arquivo .env com as credenciais AWS necessárias
 ```
 
-### 2. Rode com Docker
+### 2. Execução via Docker
 
 ```bash
 docker-compose up --build
 ```
 
-### 3. Ou rode localmente
+### 3. Execução Local
 
 ```bash
 python -m venv venv
@@ -50,7 +50,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-Acesse a documentação interativa: **http://localhost:8000/docs**
+A documentação interativa da API está disponível em: **http://localhost:8000/docs**
 
 ## Endpoints
 
@@ -62,43 +62,43 @@ Acesse a documentação interativa: **http://localhost:8000/docs**
 | `DELETE` | `/files/{id}`               | Deletar arquivo              |
 | `GET`    | `/logs/`                    | Listar logs de acesso        |
 | `GET`    | `/logs/file/{id}`           | Logs de um arquivo específico|
-| `GET`    | `/health`                   | Health check                 |
+| `GET`    | `/health`                   | Health check do serviço      |
 
-## Exemplo de uso com cURL
+## Exemplo de Utilização (cURL)
 
 ```bash
-# Upload
+# Upload de arquivo
 curl -X POST http://localhost:8000/files/upload \
   -H "X-API-Key: your-secret-api-key-here" \
   -F "file=@documento.pdf"
 
-# Gerar link de download (expira em 1h)
+# Geração de link de download (validade de 3600 segundos)
 curl http://localhost:8000/files/{file_id}/download?expiration=3600 \
   -H "X-API-Key: your-secret-api-key-here"
 
-# Ver logs
+# Consulta de logs de acesso
 curl http://localhost:8000/logs/ \
   -H "X-API-Key: your-secret-api-key-here"
 ```
 
-## Deploy no EC2
+## Implantação em EC2
 
-1. Lance uma instância EC2 (Amazon Linux 2 / Ubuntu)
-2. Instale Docker e Docker Compose
-3. Clone o repositório e configure `.env`
-4. Execute `bash scripts/setup_aws.sh seu-bucket us-east-1`
-5. Execute `docker-compose up -d`
-6. Configure o Security Group para liberar a porta 8000
+1. Provisionar instância EC2 (Amazon Linux 2 / Ubuntu)
+2. Instalar Docker e Docker Compose
+3. Clonar o repositório e configurar o arquivo `.env`
+4. Executar o script de configuração: `bash scripts/setup_aws.sh <bucket-name> <region>`
+5. Iniciar os serviços: `docker-compose up -d`
+6. Configurar o Security Group para permitir tráfego na porta 8000
 
-## Arquitetura
+## Arquitetura do Sistema
 
 ```
-Cliente → EC2 (FastAPI) → Amazon S3
-                ↓
-           SQLite/PostgreSQL (metadata + logs)
+Cliente -> Instância EC2 (FastAPI) -> Amazon S3
+                    |
+                    -> SQLite/PostgreSQL (Metadados e Logs)
 ```
 
-## Testes
+## Testes Automatizados
 
 ```bash
 pytest tests/ -v
