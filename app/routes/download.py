@@ -11,7 +11,6 @@ from app.config import get_settings
 settings = get_settings()
 router = APIRouter(prefix="/files", tags=["Download"])
 
-
 @router.get("/{file_id}/download")
 async def get_download_link(
     file_id: str,
@@ -20,21 +19,23 @@ async def get_download_link(
         default=settings.PRESIGNED_URL_EXPIRATION,
         ge=60,
         le=43200,
-        description="Validade do link em segundos (60s a 12h)",
+        description="Validade do link em segundos",
     ),
     db: AsyncSession = Depends(get_db),
     s3: S3Service = Depends(get_s3_service),
     _api_key: str = Depends(verify_api_key),
 ):
-    result = await db.execute(
-        select(FileRecord).where(FileRecord.id == file_id)
-    )
-    file_record = result.scalar_one_or_none()
-    if not file_record:
+    # Localiza o arquivo no banco para recuperar a chave do S3
+    query = await db.execute(select(FileRecord).where(FileRecord.id == file_id))
+    record = query.scalar_one_or_none()
+    
+    if not record:
         raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
 
-    url = s3.generate_presigned_url(file_record.s3_key, expiration)
+    # Gera o link assinado temporário
+    url = s3.get_signed_url(record.s3_key, expiration)
 
+    # Cria log da solicitação de download
     log_svc = LogService(db)
     await log_svc.create_log(
         action="DOWNLOAD_LINK",
@@ -45,14 +46,13 @@ async def get_download_link(
     )
 
     return {
-        "file_id": file_record.id,
-        "filename": file_record.original_filename,
+        "file_id": record.id,
+        "filename": record.original_filename,
         "download_url": url,
-        "expires_in_seconds": expiration,
+        "expires_in": expiration,
     }
 
-
-@router.get("/", summary="Listar arquivos")
+@router.get("/", summary="Listar arquivos cadastrados")
 async def list_files(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
@@ -60,13 +60,16 @@ async def list_files(
     _api_key: str = Depends(verify_api_key),
 ):
     from sqlalchemy import desc
-    result = await db.execute(
+    
+    # Busca arquivos ordenados pela data de upload
+    query = await db.execute(
         select(FileRecord)
         .order_by(desc(FileRecord.uploaded_at))
         .offset(skip)
         .limit(limit)
     )
-    files = result.scalars().all()
+    files = query.scalars().all()
+    
     return [
         {
             "id": f.id,

@@ -6,9 +6,9 @@ from app.config import get_settings
 
 settings = get_settings()
 
-
 class S3Service:
     def __init__(self):
+        # Conecta ao S3 usando as variáveis de ambiente carregadas
         self.client = boto3.client(
             "s3",
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
@@ -17,80 +17,73 @@ class S3Service:
         )
         self.bucket = settings.S3_BUCKET_NAME
 
-    def _generate_s3_key(self, filename: str) -> str:
+    def _get_unique_key(self, filename: str) -> str:
+        # Gera um nome aleatório para o arquivo no S3 para evitar conflitos
         ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
-        unique_name = f"{uuid.uuid4().hex}"
-        return f"uploads/{unique_name}.{ext}" if ext else f"uploads/{unique_name}"
+        random_id = uuid.uuid4().hex
+        return f"uploads/{random_id}.{ext}" if ext else f"uploads/{random_id}"
 
-    def _validate_extension(self, filename: str) -> None:
+    def _validate_file_type(self, filename: str) -> None:
         if "." not in filename:
-            raise HTTPException(status_code=400, detail="Arquivo sem extensão.")
+            raise HTTPException(status_code=400, detail="O arquivo enviado não possui uma extensão.")
+        
         ext = filename.rsplit(".", 1)[-1].lower()
         if ext not in settings.allowed_extensions_list:
             raise HTTPException(
                 status_code=400,
-                detail=f"Extensão '.{ext}' não permitida. "
-                       f"Permitidas: {settings.ALLOWED_EXTENSIONS}",
+                detail=f"O formato '.{ext}' não é permitido. Use: {settings.ALLOWED_EXTENSIONS}",
             )
 
-    async def upload_file(self, file: UploadFile) -> dict:
-        self._validate_extension(file.filename)
+    async def upload(self, file: UploadFile) -> dict:
+        self._validate_file_type(file.filename)
+        
+        # Lê o conteúdo para calcular o tamanho real antes de subir
+        body = await file.read()
+        size = len(body)
 
-        contents = await file.read()
-        file_size = len(contents)
-
-        if file_size > settings.max_file_size_bytes:
+        if size > settings.max_file_size_bytes:
             raise HTTPException(
                 status_code=413,
-                detail=f"Arquivo excede o limite de {settings.MAX_FILE_SIZE_MB}MB.",
+                detail=f"Arquivo excede o limite permitido de {settings.MAX_FILE_SIZE_MB}MB.",
             )
 
-        s3_key = self._generate_s3_key(file.filename)
+        key = self._get_unique_key(file.filename)
 
         try:
             self.client.put_object(
                 Bucket=self.bucket,
-                Key=s3_key,
-                Body=contents,
+                Key=key,
+                Body=body,
                 ContentType=file.content_type or "application/octet-stream",
             )
         except ClientError as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Erro ao enviar para S3: {e.response['Error']['Message']}",
-            )
+            msg = e.response.get('Error', {}).get('Message', 'Erro no S3')
+            raise HTTPException(status_code=502, detail=f"Falha ao salvar no storage: {msg}")
 
         return {
-            "s3_key": s3_key,
-            "file_size": file_size,
+            "s3_key": key,
+            "file_size": size,
             "content_type": file.content_type,
         }
 
-    def generate_presigned_url(self, s3_key: str, expiration: int = None) -> str:
-        if expiration is None:
-            expiration = settings.PRESIGNED_URL_EXPIRATION
+    def get_signed_url(self, key: str, ttl: int = None) -> str:
+        ttl = ttl or settings.PRESIGNED_URL_EXPIRATION
         try:
-            url = self.client.generate_presigned_url(
+            return self.client.generate_presigned_url(
                 "get_object",
-                Params={"Bucket": self.bucket, "Key": s3_key},
-                ExpiresIn=expiration,
+                Params={"Bucket": self.bucket, "Key": key},
+                ExpiresIn=ttl,
             )
-            return url
         except ClientError as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Erro ao gerar link: {e.response['Error']['Message']}",
-            )
+            msg = e.response.get('Error', {}).get('Message', 'Erro ao gerar link')
+            raise HTTPException(status_code=502, detail=f"Não foi possível gerar o link: {msg}")
 
-    def delete_file(self, s3_key: str) -> None:
+    def remove(self, key: str) -> None:
         try:
-            self.client.delete_object(Bucket=self.bucket, Key=s3_key)
+            self.client.delete_object(Bucket=self.bucket, Key=key)
         except ClientError as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Erro ao deletar: {e.response['Error']['Message']}",
-            )
-
+            msg = e.response.get('Error', {}).get('Message', 'Erro ao deletar')
+            raise HTTPException(status_code=502, detail=f"Erro ao remover arquivo: {msg}")
 
 def get_s3_service() -> S3Service:
     return S3Service()
