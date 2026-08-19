@@ -11,9 +11,11 @@ os.environ["S3_BUCKET_NAME"] = "test-bucket"
 os.environ["API_KEY"] = "test-api-key"
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_file_upload.db"
 
+import boto3  # noqa: E402
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from httpx import AsyncClient, ASGITransport  # noqa: E402
+from moto import mock_aws  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.config import get_settings  # noqa: E402
@@ -44,3 +46,20 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture
+def s3():
+    # moto intercepts botocore, so every client built while this context is
+    # open talks to an in-memory S3. The application builds a fresh client per
+    # request through get_s3_service, which means requests made inside a test
+    # are captured without the application knowing anything about the mock.
+    with mock_aws():
+        client = boto3.client("s3", region_name=settings.AWS_REGION)
+        client.create_bucket(Bucket=settings.S3_BUCKET_NAME)
+        yield client
+
+
+def s3_keys(client) -> list[str]:
+    response = client.list_objects_v2(Bucket=settings.S3_BUCKET_NAME)
+    return [item["Key"] for item in response.get("Contents", [])]

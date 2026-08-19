@@ -25,8 +25,9 @@ The engineering decision on display is the separation between the control plane 
 | Pydantic | 2.10.4 | Request/response validation built into FastAPI |
 | pydantic-settings | 2.7.1 | Environment configuration with typed fields; missing AWS credentials fail at startup, not at first upload |
 | python-multipart | 0.0.20 | Required by FastAPI to parse `multipart/form-data` uploads |
-| httpx | 0.28.1 | Async test client driving the app through `ASGITransport` |
-| pytest / pytest-asyncio | 8.3.4 / 0.25.0 | Test runner and async test support |
+| httpx | 0.28.1 | Async test client driving the app through `ASGITransport` (dev only) |
+| pytest / pytest-asyncio | 9.1.1 / 1.4.0 | Test runner and async test support (dev only) |
+| moto | 5.2.2 | In-memory S3, so the suite exercises the real boto3 calls without an AWS account (dev only) |
 | Docker Compose | file format 3.9 | Single-service local environment with `.env` injection |
 
 ## Architecture
@@ -137,6 +138,8 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+`requirements.txt` installs only what the service needs to run. To run the tests as well, install `requirements-dev.txt` instead, which includes it.
+
 Interactive OpenAPI documentation: `http://localhost:8000/docs`.
 
 ### Provision the bucket
@@ -163,21 +166,27 @@ curl http://localhost:8000/logs/?action=UPLOAD \
 pytest
 ```
 
-Three tests, all passing, driven through `httpx.ASGITransport`, so no network listener is started:
+Twenty tests, all passing, driven through `httpx.ASGITransport`, so no network listener is started. Install the test tooling with `pip install -r requirements-dev.txt`.
 
-- `test_upload_without_api_key` asserts that an upload without the `X-API-Key` header is rejected with 403 before reaching the handler
-- `test_health_check` asserts the unauthenticated liveness route
-- `test_download_not_found` asserts 404 for an unknown file ID
+| File | Covers |
+|---|---|
+| `test_upload.py` | Upload stores the bytes in S3 and commits the metadata row with the same key; two uploads of the same filename get distinct keys; the server-generated key keeps only the extension; disallowed extension returns 400 and stores nothing; a file over the size limit returns 413 and stores nothing; a request without the API key returns 403; the liveness route |
+| `test_download.py` | Listing returns what was uploaded and honours `skip` and `limit`; a `limit` above the maximum returns 422; the download route returns a presigned URL for the stored key with the requested lifetime; the `expiration` bounds are enforced at 60 and 43200 and rejected at 59 and 43201; an unknown file ID returns 404 |
+| `test_delete.py` | Delete removes both the S3 object and the metadata row and makes the file unaddressable; an unknown ID returns 404; deleting one file leaves the others intact; upload, link issuance and deletion each write their access log entry, readable through `/logs/` |
 
-The suite needs no arguments, no `.env` file and no AWS credentials. `tests/conftest.py` sets the required settings before the application is imported, which pins the suite to a separate SQLite file rather than the development database and guarantees it never reaches AWS. `pytest.ini` pins `asyncio_mode` explicitly instead of relying on a command-line flag.
+S3 is served by `moto` in memory. The `s3` fixture opens a `mock_aws` context and creates the bucket, and because the application builds a fresh boto3 client per request through `get_s3_service`, requests made inside a test are intercepted without the application knowing anything about the mock. The real `put_object`, `generate_presigned_url` and `delete_object` calls are exercised, and the assertions read the resulting objects back out of the mocked bucket.
 
-Schema creation is handled by an autouse fixture that calls the application's own `init_db()` before each test and drops the tables afterwards. This is necessary because `ASGITransport` does not execute the application lifespan, so the startup hook that normally creates the tables never fires under test.
+The suite needs no arguments, no `.env` file, no AWS credentials and no network. `tests/conftest.py` sets the required settings before the application is imported, which pins the suite to a separate SQLite file rather than the development database. The credentials it sets are the literal string `testing`, so a call that escaped the mock would fail rather than reach an account. `pytest.ini` pins `asyncio_mode` explicitly instead of relying on a command-line flag.
 
-What the suite does not cover: the upload happy path, S3 interaction of any kind (no `moto` or stubbed client), deletion, the list and logs endpoints, extension and size rejection paths, presigned URL generation, and expiration bound validation. There is no coverage measurement.
+Schema creation is handled by an autouse fixture that calls the application's own `init_db()` before each test and drops the tables afterwards. This is necessary because `ASGITransport` does not execute the application lifespan, so the startup hook that normally creates the tables never fires under test. Together with a per-test `mock_aws` context, this leaves every test with an empty database and an empty bucket.
+
+What the suite still does not cover: the S3 failure paths that map `ClientError` to 502, concurrent uploads, the `/logs/file/{id}` route, and the behaviour of the delete path when the S3 call succeeds and the transaction then fails. There is no coverage measurement.
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs the suite on every push and pull request against `master`, on Python 3.12 to match the Dockerfile base image. It installs `requirements.txt` with pip caching and runs `pytest`. No step requires a secret, because no test reaches AWS.
+`.github/workflows/ci.yml` runs the suite on every push and pull request against `master`, on Python 3.12 to match the Dockerfile base image. It installs `requirements-dev.txt` with pip caching and runs `pytest`. No step requires a secret, because no test reaches AWS.
+
+Runtime and test dependencies are split: `requirements.txt` holds what the application needs to serve traffic and is what the Docker image installs, while `requirements-dev.txt` pulls that in and adds the test tooling.
 
 ## Technical decisions and trade-offs
 
@@ -252,7 +261,8 @@ What I gave up: there is no principal in the system, so the access log records I
 - **Content type is trusted from the client.** Validation is extension-based only; the `Content-Type` stored and sent to S3 is whatever the client declared. There is no magic-byte inspection and no malware scanning.
 - **No rate limiting and no request size cap at the edge.** A caller can force repeated full-body reads up to the configured limit before rejection happens.
 - **No migrations.** `create_all` builds missing tables and ignores drift; Alembic would be the first addition if the schema were to evolve.
-- **Test coverage is thin.** Three tests pass, but nothing exercises S3, the upload happy path, deletion, or the rejection paths. `moto` or a stubbed client is the missing piece, and CI only proves that what exists keeps passing.
+- **The S3 error paths are untested.** The happy paths and the validation rejections are covered, but nothing forces a `ClientError` to check the 502 mapping, and nothing reproduces the split-brain case in decision 4 where the object is written and the transaction then fails. Both need a fixture that makes the mocked client fail on demand.
+- **No coverage measurement.** The suite is not run under `coverage`, so the untested branches are known by reading rather than by report.
 - **`scripts/setup_aws.sh` always sends `--create-bucket-configuration LocationConstraint`**, including for the default `us-east-1`, where the AWS API rejects that parameter. The region argument needs a conditional branch.
 - **Single Uvicorn process in the container.** No worker count is configured and there is no reverse proxy in the compose file, so TLS termination, request buffering, and body limits are unaddressed in the shipped environment.
 - **The image is single-stage.** Build and runtime share one layer, so pip and the full toolchain ship with the application. A multi-stage build with a virtual environment copied into a clean base would cut the image down and reduce what an attacker finds inside it.

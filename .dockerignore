@@ -33,6 +33,7 @@ build/
 # Tests and CI, not needed in the runtime image
 tests/
 pytest.ini
+requirements-dev.txt
 .github/
 
 # Documentation
