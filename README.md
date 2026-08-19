@@ -126,6 +126,8 @@ docker-compose up --build
 
 The service listens on port 8000. The compose file bind-mounts the project directory into the container, so the SQLite file is written to the host working directory.
 
+The image runs uvicorn as `appuser`, not as root, and `.dockerignore` keeps `.env`, `.git`, caches, virtual environments, local databases and the test suite out of the build context. One consequence of the bind mount is that the container's ownership of `/app` is replaced at runtime by the host directory's: if that directory is not writable by the container user, SQLite cannot create its file. Running without the bind mount, or pointing `DATABASE_URL` at a path the user owns, avoids it.
+
 ### Run locally
 
 ```bash
@@ -158,18 +160,24 @@ curl http://localhost:8000/logs/?action=UPLOAD \
 ## Testing
 
 ```bash
-pytest tests/ -v -o asyncio_mode=auto
+pytest
 ```
 
-The suite contains three tests driven through `httpx.ASGITransport`, so no network listener is started:
+Three tests, all passing, driven through `httpx.ASGITransport`, so no network listener is started:
 
 - `test_upload_without_api_key` asserts that an upload without the `X-API-Key` header is rejected with 403 before reaching the handler
 - `test_health_check` asserts the unauthenticated liveness route
 - `test_download_not_found` asserts 404 for an unknown file ID
 
-Known state of the suite, as run against this commit: two tests pass and `test_download_not_found` fails with `sqlite3.OperationalError: no such table: files`. The client fixture builds `ASGITransport` directly, which does not execute the application lifespan, so `init_db()` never runs and no schema exists for the query to hit. Fixing it requires a fixture that creates the schema (or uses `LifespanManager`) rather than a change to application code. The `-o asyncio_mode=auto` flag is needed because the async fixture is declared with `@pytest.fixture` and the repository ships no pytest configuration file to set that mode.
+The suite needs no arguments, no `.env` file and no AWS credentials. `tests/conftest.py` sets the required settings before the application is imported, which pins the suite to a separate SQLite file rather than the development database and guarantees it never reaches AWS. `pytest.ini` pins `asyncio_mode` explicitly instead of relying on a command-line flag.
 
-What the suite does not cover: the upload happy path, S3 interaction of any kind (no `moto` or stubbed client), deletion, the list and logs endpoints, extension and size rejection paths, presigned URL generation, and expiration bound validation. There is no coverage measurement and no CI workflow in the repository.
+Schema creation is handled by an autouse fixture that calls the application's own `init_db()` before each test and drops the tables afterwards. This is necessary because `ASGITransport` does not execute the application lifespan, so the startup hook that normally creates the tables never fires under test.
+
+What the suite does not cover: the upload happy path, S3 interaction of any kind (no `moto` or stubbed client), deletion, the list and logs endpoints, extension and size rejection paths, presigned URL generation, and expiration bound validation. There is no coverage measurement.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs the suite on every push and pull request against `master`, on Python 3.12 to match the Dockerfile base image. It installs `requirements.txt` with pip caching and runs `pytest`. No step requires a secret, because no test reaches AWS.
 
 ## Technical decisions and trade-offs
 
@@ -244,10 +252,10 @@ What I gave up: there is no principal in the system, so the access log records I
 - **Content type is trusted from the client.** Validation is extension-based only; the `Content-Type` stored and sent to S3 is whatever the client declared. There is no magic-byte inspection and no malware scanning.
 - **No rate limiting and no request size cap at the edge.** A caller can force repeated full-body reads up to the configured limit before rejection happens.
 - **No migrations.** `create_all` builds missing tables and ignores drift; Alembic would be the first addition if the schema were to evolve.
-- **No CI pipeline.** The repository has no workflow configuration, so nothing runs the tests on push.
-- **The test suite does not currently pass in full** (see Testing) and does not exercise S3 at all.
+- **Test coverage is thin.** Three tests pass, but nothing exercises S3, the upload happy path, deletion, or the rejection paths. `moto` or a stubbed client is the missing piece, and CI only proves that what exists keeps passing.
 - **`scripts/setup_aws.sh` always sends `--create-bucket-configuration LocationConstraint`**, including for the default `us-east-1`, where the AWS API rejects that parameter. The region argument needs a conditional branch.
 - **Single Uvicorn process in the container.** No worker count is configured and there is no reverse proxy in the compose file, so TLS termination, request buffering, and body limits are unaddressed in the shipped environment.
+- **The image is single-stage.** Build and runtime share one layer, so pip and the full toolchain ship with the application. A multi-stage build with a virtual environment copied into a clean base would cut the image down and reduce what an attacker finds inside it.
 
 ## License
 
