@@ -69,9 +69,16 @@ async def test_list_respects_skip_and_limit(client, api_headers, s3):
 
 
 @pytest.mark.asyncio
-async def test_list_rejects_limit_above_the_maximum(client, api_headers):
-    response = await client.get("/files/?limit=101", headers=api_headers)
+@pytest.mark.parametrize("query", ["limit=0", "limit=101", "skip=-1"])
+async def test_list_rejects_pagination_outside_the_bounds(client, api_headers, query):
+    response = await client.get(f"/files/?{query}", headers=api_headers)
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_accepts_the_maximum_limit(client, api_headers):
+    response = await client.get("/files/?limit=100", headers=api_headers)
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
