@@ -1,0 +1,40 @@
+# Version control
+.git
+.gitignore
+
+# Secrets and local configuration
+.env
+.env.*
+
+# Python bytecode and caches
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Local databases
+*.db
+*.sqlite3
+
+# Packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# Tests and CI, not needed in the runtime image
+tests/
+pytest.ini
+.github/
+
+# Documentation
+README.md
+LICENSE
