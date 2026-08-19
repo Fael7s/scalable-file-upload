@@ -166,13 +166,16 @@ curl http://localhost:8000/logs/?action=UPLOAD \
 pytest
 ```
 
-Twenty tests, all passing, driven through `httpx.ASGITransport`, so no network listener is started. Install the test tooling with `pip install -r requirements-dev.txt`.
+Fifty-six tests, all passing, driven through `httpx.ASGITransport`, so no network listener is started. Install the test tooling with `pip install -r requirements-dev.txt`.
 
 | File | Covers |
 |---|---|
-| `test_upload.py` | Upload stores the bytes in S3 and commits the metadata row with the same key; two uploads of the same filename get distinct keys; the server-generated key keeps only the extension; disallowed extension returns 400 and stores nothing; a file over the size limit returns 413 and stores nothing; a request without the API key returns 403; the liveness route |
-| `test_download.py` | Listing returns what was uploaded and honours `skip` and `limit`; a `limit` above the maximum returns 422; the download route returns a presigned URL for the stored key with the requested lifetime; the `expiration` bounds are enforced at 60 and 43200 and rejected at 59 and 43201; an unknown file ID returns 404 |
+| `test_auth.py` | Parameterized over the six routes that depend on `verify_api_key`: each rejects a missing, a wrong and an empty `X-API-Key` with 403. A positive case asserts the same routes answer with something other than 403 once the configured key is sent, which is what proves the rejections come from the credential rather than from a path that no longer resolves |
 | `test_delete.py` | Delete removes both the S3 object and the metadata row and makes the file unaddressable; an unknown ID returns 404; deleting one file leaves the others intact; upload, link issuance and deletion each write their access log entry, readable through `/logs/` |
+| `test_download.py` | Listing returns what was uploaded and honours `skip` and `limit`; pagination is rejected at `limit=0`, `limit=101` and `skip=-1`, and accepted at `limit=100`; the download route returns a presigned URL for the stored key with the requested lifetime; the `expiration` bounds are accepted at 60 and 43200 and rejected at 59 and 43201; an unknown file ID returns 404 |
+| `test_logs.py` | `/logs/file/{id}` returns the upload, link issuance and deletion entries for the file asked for and none belonging to a second file uploaded alongside it; the `action` filter on `/logs/` returns only matching entries, and an empty list for an action that never happened; `skip` and `limit` page through the entries; pagination is rejected at `limit=0`, `limit=201` and `skip=-1`, and accepted at `limit=200` |
+| `test_s3_fixture.py` | The mocked bucket is the one `S3Service` resolves from the settings, and it starts empty for every test. Without this, an S3 assertion elsewhere could pass while reading a bucket the application never wrote to |
+| `test_upload.py` | Upload stores the bytes in S3 and commits the metadata row with the same key; two uploads of the same filename get distinct keys; the server-generated key keeps only the extension; a disallowed extension returns 400 and stores nothing; a file over the size limit returns 413 and stores nothing; the liveness route |
 
 S3 is served by `moto` in memory. The `s3` fixture opens a `mock_aws` context and creates the bucket, and because the application builds a fresh boto3 client per request through `get_s3_service`, requests made inside a test are intercepted without the application knowing anything about the mock. The real `put_object`, `generate_presigned_url` and `delete_object` calls are exercised, and the assertions read the resulting objects back out of the mocked bucket.
 
@@ -180,7 +183,11 @@ The suite needs no arguments, no `.env` file, no AWS credentials and no network.
 
 Schema creation is handled by an autouse fixture that calls the application's own `init_db()` before each test and drops the tables afterwards. This is necessary because `ASGITransport` does not execute the application lifespan, so the startup hook that normally creates the tables never fires under test. Together with a per-test `mock_aws` context, this leaves every test with an empty database and an empty bucket.
 
-What the suite still does not cover: the S3 failure paths that map `ClientError` to 502, concurrent uploads, the `/logs/file/{id}` route, and the behaviour of the delete path when the S3 call succeeds and the transaction then fails. There is no coverage measurement.
+The size-limit test lowers `MAX_FILE_SIZE_MB` to 1 for the duration of the test and sends exactly one byte more than the limit, so the rejection is exercised at its boundary without allocating a 50 MB body.
+
+Three of the assertions were checked by mutation rather than by inspection: dropping the key comparison in `verify_api_key` fails the six wrong-key cases, removing the `file_id` filter in `get_logs_by_file` fails the per-file history test, and removing the `action` filter in `get_logs` fails both filter tests. Each break was reverted after the run.
+
+What the suite still does not cover: the S3 failure paths that map `ClientError` to 502, concurrent uploads, the ordering guarantee on log and file listings, and the behaviour of the delete path when the S3 call succeeds and the transaction then fails. There is no coverage measurement.
 
 ### Continuous integration
 
